@@ -1201,6 +1201,20 @@
         Keybinding to either show or launch the 10th application in the dash.
       </description>
     </key>
+    <key name="app-hotkey-cycle-up" type="as">
+      <default><![CDATA[['<Super>period']]]></default>
+      <summary>Keybinding to activate next window in panel</summary>
+      <description>
+        Keybinding to activate next window in panel
+      </description>
+    </key>
+    <key name="app-hotkey-cycle-down" type="as">
+      <default><![CDATA[['<Super>comma']]]></default>
+      <summary>Keybinding to activate previous window in panel</summary>
+      <description>
+        Keybinding to activate previous window in panel
+      </description>
+    </key>
      <key type="b" name="progress-show-bar">
       <default>true</default>
       <summary>Show progress bar on app icon</summary>

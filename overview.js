@@ -48,6 +48,13 @@ var dtpOverview = Utils.defineClass({
         this._panel = panel;
         this.taskbar = panel.taskbar;
 
+        this.cycleWindowInfo = {
+            currentWindowIndex: -1,
+            isCapturing: false,
+            keyFocusOutId: null,
+            connectedAppIcon: null,
+        }
+
         this._injectionsHandler = new Utils.InjectionsHandler();
         this._signalsHandler = new Utils.GlobalSignalsHandler();
 
@@ -208,6 +215,75 @@ var dtpOverview = Utils.defineClass({
         }
     },
 
+    _cycleWorkspace: function(direction) {
+        const workspaceCount = Utils.getWorkspaceCount();
+        let currentWorkspace = Utils.getCurrentWorkspace();
+        let currentWorkspaceIndex = -1;
+        for (let i = 0; i < workspaceCount;  i++) {
+            let workspace = Utils.getWorkspaceByIndex(i);
+            if (workspace === currentWorkspace) {
+                currentWorkspaceIndex = i;
+                break
+            }
+        }
+
+        let shouldAnimate = Main.wm._shouldAnimate;
+        let newWorkspaceIndex = currentWorkspaceIndex + (direction == 'up' ? 1 : -1);
+        newWorkspaceIndex = (newWorkspaceIndex + workspaceCount) % workspaceCount;
+
+        Main.wm._shouldAnimate = () => false;
+        let newWorkspace = Utils.getWorkspaceByIndex(newWorkspaceIndex);
+        newWorkspace.activate(global.display.get_current_time_roundtrip());
+        Main.wm._shouldAnimate = shouldAnimate;
+    },
+
+    _cycleApps: function(direction) {
+        let windows = this.taskbar.getAppInfos().reduce((ws, appInfo) => ws.concat(appInfo.windows), []);
+        const cycleWindowInfo = this.cycleWindowInfo;
+        if (cycleWindowInfo.currentWindowIndex === -1) {
+            cycleWindowInfo.currentWindowIndex = windows.indexOf(global.display.focus_window);
+        }
+        cycleWindowInfo.currentWindowIndex = cycleWindowInfo.currentWindowIndex + (direction == 'up' ? 1 : -1)
+        cycleWindowInfo.currentWindowIndex = (cycleWindowInfo.currentWindowIndex + windows.length) % windows.length;
+
+        const getAppIcon =() => this.taskbar._getAppIcons()[cycleWindowInfo.currentWindowIndex];
+        if (!cycleWindowInfo.isCapturing) {
+            cycleWindowInfo.isCapturing = true;
+            const capturedEventId = global.stage.connect('captured-event', (actor, e) => {
+                if (e.type() == Clutter.EventType.KEY_RELEASE && e.get_key_symbol() == Clutter.Super_L) {
+                    global.stage.disconnect(capturedEventId);
+                    if (cycleWindowInfo.connectedAppIcon != null) {
+                        cycleWindowInfo.connectedAppIcon._previewMenu._endPeek();
+                        const button = 1;
+                        cycleWindowInfo.connectedAppIcon.actor.disconnect(cycleWindowInfo.keyFocusOutId);
+                    }
+                    Main.activateWindow(windows[cycleWindowInfo.currentWindowIndex]);
+
+                    cycleWindowInfo.connectedAppIcon = null;
+                    cycleWindowInfo.keyFocusOutId = null;
+                    cycleWindowInfo.isCapturing = false;
+                    cycleWindowInfo.currentWindowIndex = -1;
+                }
+                let current_evt = Clutter.get_current_event();
+
+                return Clutter.EVENT_PROPAGATE;
+            })
+        }
+        if (cycleWindowInfo.keyFocusOutId != null) {
+            cycleWindowInfo.connectedAppIcon.actor.disconnect(cycleWindowInfo.keyFocusOutId);
+        }
+        cycleWindowInfo.connectedAppIcon = getAppIcon();
+
+        const connectedAppIcon = cycleWindowInfo.connectedAppIcon;
+
+        cycleWindowInfo.keyFocusOutId = connectedAppIcon.actor.connect('key-focus-out', () => {
+            cycleWindowInfo.connectedAppIcon.actor.grab_key_focus();
+        });
+
+        connectedAppIcon._previewMenu._peek(windows[cycleWindowInfo.currentWindowIndex]);
+        connectedAppIcon.actor.grab_key_focus();
+    },
+
     _endHotkeyPreviewCycle: function() {
         if (this._hotkeyPreviewCycleInfo) {
             global.stage.disconnect(this._hotkeyPreviewCycleInfo.capturedEventId);
@@ -266,11 +342,37 @@ var dtpOverview = Utils.defineClass({
             keys.push('app-hotkey-kp-', 'app-shift-hotkey-kp-', 'app-ctrl-hotkey-kp-'); // Key-pad numbers
         }
 
+        try {
+            // Utils.addKeybinding("<Alt>Above_Tab", Me.settings, () => this._cycleApps('down'));
+            let Shell = imports.gi.Shell;
+            let mode = Shell.ActionMode ? Shell.ActionMode : Shell.KeyBindingMode;
+            // Main.wm.setCustomKeybindingHandler('switch-group', mode.NORMAL, () => this._cycleApps('up'));
+            // Main.wm.setCustomKeybindingHandler('switch-group-backward', mode.NORMAL, () => this._cycleApps('down'));
+            // Utils.addKeybinding('app-hotkey-i', Me.settings, () => this._cycleApps('up'));
+            // Main.wm.setCustomKeybindingHandler('switch-group-backward', mode.NORMAL, () => this._cycleApps('down'));
+
+            Utils.addKeybinding("app-hotkey-cycle-down", Me.settings, () => this._cycleApps('down'));
+            Utils.addKeybinding("app-hotkey-cycle-up", Me.settings, () => this._cycleApps('up'));
+
+        } catch (ex) {
+            global.log("Exception", ex)
+        }
         keys.forEach( function(key) {
             for (let i = 0; i < this._numHotkeys; i++) {
                 let appNum = i;
+                global.log("  DTP: Me.settings: ", Me.settings)
+                if (i == 0) {
+                    // Utils.addKeybinding(key + (i + 1), Me.settings, () => this._cycleApps('down'));
+                    Utils.addKeybinding(key + (i + 1), Me.settings, () => this._cycleWorkspace('down'));                   
+                } else if (i == 1) {
+            // Utils.addKeybinding(key + ".", Me.settings, () => this._cycleApps('up'));
+                    // Utils.addKeybinding(key + (i + 1), Me.settings, () => this._cycleApps('up'));
+                    Utils.addKeybinding(key + (i + 1), Me.settings, () => this._cycleWorkspace('up'));                   
 
-                Utils.addKeybinding(key + (i + 1), Me.settings, () => this._activateApp(appNum));
+                } else {
+                    Utils.addKeybinding(key + (i + 1), Me.settings, () => this._activateApp(appNum));
+                }
+
             }
         }, this);
 
@@ -291,6 +393,9 @@ var dtpOverview = Utils.defineClass({
                 Utils.removeKeybinding(key + (i + 1));
             }
         }, this);
+
+        Utils.removeKeybinding("app-hotkey-cycle-down");
+        Utils.removeKeybinding("app-hotkey-cycle-up");
         
         if (Main.wm._switchToApplication) {
             let gsSettings = new Gio.Settings({ schema_id: imports.ui.windowManager.SHELL_KEYBINDINGS_SCHEMA });
